@@ -8,11 +8,6 @@ endDate = timestamp(2026, 12, 31, 16, 00)
 timeframeMinutes = input(5, "Opening Range Minutes")
 exitEOD = input(false, "Exit End of Day")
 
-// Extract current date components
-year_ = year(time)
-month_ = month(time)
-day_ = dayofmonth(time)
-
 // Define session timestamps
 marketOpenHour = 9
 marketOpenMinute = 30
@@ -20,33 +15,63 @@ marketCloseHour = 16
 marketCloseMinute = 00
 latestEntryHour = 11
 latestEntryMinute = 00
+premarketOpen = 4
 
-// Define the frist 5-min range using 1min candles
+// Define ORB, PM, and PD levels
 var float openingRangeHigh = na 
 var float openingRangeLow = na 
-var bool rangeSet = false
-var float breakoutCandleHigh = na
+var bool ORBrangeSet = false
+
+var float breakoutCandleHigh = na 
 var float breakoutCandleLow = na
 var int breakoutBarIndex = na 
+
+var float premarketHigh = na
+var float premarketLow = na
+var bool PMrangeSet = false
+
+var float prevHigh = na
+var float prevLow = na
+var bool PDrangeSet = false
 
 // Detect New Day and Reset ORB
 isNewDay = ta.change(dayofmonth(time))  != 0   // True when a new day starts
 if isNewDay
     openingRangeHigh := na
     openingRangeLow := na
-    rangeSet := false
+    ORBrangeSet := false
+    PMrangeSet := false
+    PDrangeSet := false
     breakoutCandleHigh := na
     breakoutCandleLow := na
     breakoutBarIndex := na 
+    premarketHigh := na
+    premarketLow := na
+
+// Check if the day has changed for PD levels
+if (dayofweek != dayofweek[1])
+    prevHigh := request.security(syminfo.tickerid, "D", high[0])  // Highest price from previous session
+    prevLow := request.security(syminfo.tickerid, "D", low[0])   // Lowest price from previous session
+
+if (hour == marketCloseHour and minute == marketCloseMinute)
+    PDrangeSet := true
+
+// Update premarket high and low
+if (not PMrangeSet and hour >= premarketOpen and hour <= marketOpenHour and minute <= marketOpenMinute)
+    premarketHigh := na(premarketHigh) ? high : math.max(premarketHigh, high)
+    premarketLow := na(premarketLow) ? low : math.min(premarketLow, low)
+
+if (hour == marketOpenHour and minute == marketOpenMinute)
+    PMrangeSet := true
 
 // Capture opening Range 
-if (not rangeSet and hour == marketOpenHour and minute >= marketOpenMinute and minute < (marketOpenMinute + timeframeMinutes))
+if (not ORBrangeSet and hour == marketOpenHour and minute >= marketOpenMinute and minute < (marketOpenMinute + timeframeMinutes))
     openingRangeHigh := na(openingRangeHigh) ? high : math.max(openingRangeHigh, high)
     openingRangeLow := na(openingRangeLow) ? low : math.min(openingRangeLow, low)
 
 //Lock the range after 5min
 if (hour == marketOpenHour and minute == marketOpenMinute + timeframeMinutes)
-    rangeSet := true
+    ORBrangeSet := true
 
 // Define Strong Retest Candle Types
 candleRange = high - low
@@ -63,8 +88,8 @@ isStrongBullishCandle = candleBody > candleRange * 0.6  // Bullish candle with >
 isStrongBearishCandle = candleBody > candleRange * 0.6  // Bearish candle with >60% body
 
 // Entry Conditions
-breakoutLong = ta.crossover(close, openingRangeHigh) and (isHammerBullish or isStrongBullishCandle)
-breakoutShort = ta.crossunder(close, openingRangeLow) and (isInvertedHammerBearish or isStrongBearishCandle)
+breakoutLong = ta.crossover(close, openingRangeHigh) and isStrongBullishCandle
+breakoutShort = ta.crossunder(close, openingRangeLow) and isStrongBearishCandle
 validTime = (hour >= marketOpenHour and hour <= latestEntryHour and (hour != latestEntryHour or minute <= latestEntryMinute))
 
 // Store Breakout Candle High/Low
@@ -75,8 +100,6 @@ if breakoutLong or breakoutShort
 
 //Retest Must Come After breakout bar 
 retestCandleAfterBreakout = bar_index > breakoutBarIndex
-
-
 
 //Valid Retests
 validRetestUp = retestCandleAfterBreakout and low <= openingRangeHigh and close > openingRangeHigh and (isHammerBullish or isStrongBullishCandle)
@@ -99,11 +122,9 @@ if ta.change(dayofmonth(time))  != 0
     dailyLow := low
 
 //Variables for TP and SL lines
-var line longTP1Line = na
-var line longTP2Line = na 
+var line longTP1Line = na 
 var line longSLLine = na 
 var line shortTP1Line = na 
-var line shortTP2Line = na 
 var line shortSLLine = na
 
 // Long Trade Execution
@@ -113,22 +134,14 @@ if (validRetestUp and validTime and time >= startDate and time <= endDate)
     rrTargetLong = close + (close - stopLossLong) * 2 //1:2 RR Target 
 
     // TP1 = First to hit newHighOfDay or 1:2 RR 
-    takeProfit1Long := dailyHigh
-    if rrTargetLong < dailyHigh
-        takeProfit1Long := rrTargetLong
-
-    //TP2 = whatever remains
-    takeProfit2Long := dailyHigh
-    if takeProfit1Long == dailyHigh
-        takeProfit2Long := rrTargetLong    
+    takeProfit1Long := rrTargetLong
+   
 
     //Plot TP and SL lines
-    longTP1Line := line.new(x1=bar_index, y1=takeProfit1Long, x2=bar_index + 10, y2=takeProfit1Long, color=color.green, width = 2, style=line.style_dashed)
-    longTP2Line := line.new(x1=bar_index, y1=takeProfit2Long, x2=bar_index + 10, y2=takeProfit2Long, color=color.green, width = 2, style=line.style_dashed)
-    longSLLine := line.new(x1=bar_index, y1=stopLossLong, x2=bar_index + 10, y2=stopLossLong, color=color.red, width = 2, style=line.style_dashed)
+    longTP1Line := line.new(x1=bar_index, y1=takeProfit1Long, x2=bar_index + 1, y2=takeProfit1Long, color=color.green, width = 2, style=line.style_dashed)
+    longSLLine := line.new(x1=bar_index, y1=stopLossLong, x2=bar_index + 1, y2=stopLossLong, color=color.red, width = 2, style=line.style_dashed)
 
-    strategy.exit("1", from_entry = "Long", qty_percent = 50, limit = takeProfit1Long)
-    strategy.exit("2", from_entry = "Long", qty_percent = 50, limit = takeProfit2Long)
+    strategy.exit("1", from_entry = "Long", qty_percent = 100, limit = takeProfit1Long)
 
 //Short Trade Execution
 if (validRetestDown and validTime and time >= startDate and time <= endDate)
@@ -138,25 +151,13 @@ if (validRetestDown and validTime and time >= startDate and time <= endDate)
     rrTargetShort = close - (stopLossShort - close) * 2  // 1:2 RR target
 
     // TP1 = First to hit New Low of Day or 1:2 RR
-    takeProfit1Short := dailyLow
-    if rrTargetShort > dailyLow
-        takeProfit1Short := rrTargetShort
-
-    // TP2 = Whichever remains
-    takeProfit2Short := dailyLow
-    if takeProfit1Short == dailyLow
-        takeProfit2Short := rrTargetShort
+    takeProfit1Short := rrTargetShort
 
     //Plot TP and SL lines
-    if na(shortTP1Line)
-        shortTP1Line := line.new(x1=bar_index, y1=takeProfit1Short, x2=bar_index, y2=takeProfit1Short, color=color.green, width = 1, style=line.style_dashed)
-    if na(shortTP2Line)
-        shortTP2Line := line.new(x1=bar_index, y1=takeProfit2Short, x2=bar_index, y2=takeProfit2Short, color=color.green, width = 1, style=line.style_dashed)
-    if na(shortSLLine)    
-        shortSLLine := line.new(x1=bar_index, y1=stopLossShort, x2=bar_index, y2=stopLossShort, color=color.red, width = 1, style=line.style_dashed)
+    shortTP1Line := line.new(x1=bar_index, y1=takeProfit1Short, x2=bar_index + 1, y2=takeProfit1Short, color=color.green, width = 1, style=line.style_dashed)
+    shortSLLine := line.new(x1=bar_index, y1=stopLossShort, x2=bar_index + 1, y2=stopLossShort, color=color.red, width = 1, style=line.style_dashed)
 
-    strategy.exit("1", from_entry="Short", qty_percent=50, limit=takeProfit1Short)
-    strategy.exit("2", from_entry="Short", qty_percent=50, limit=takeProfit2Short)
+    strategy.exit("1", from_entry="Short", qty_percent=100, limit=takeProfit1Short)
 
 
 //Close Trade if a Candle Fully Closes Beyond Stop Loss
@@ -175,7 +176,7 @@ if (exitEOD and hour == marketCloseHour and minute >= marketCloseMinute)
 // Preserve Visuals
 plot(openingRangeHigh, color=color.green, title="Opening Range High")
 plot(openingRangeLow, color=color.red, title="Opening Range Low")
-
-// Debugging Strategy Execution
-plot(strategy.opentrades, color=color.green, style=plot.style_stepline, title="Open Trades")
-plot(strategy.closedtrades, color=color.orange, style=plot.style_stepline, title="Closed Trades")
+plot(premarketHigh, "Premarket High", color=color.blue, linewidth=1, style=plot.style_line)
+plot(premarketLow, "Premarket Low", color=color.blue, linewidth=1, style=plot.style_line)
+plot(prevHigh, "Previous Day High", color = color.purple, linewidth = 1, style = plot.style_line)
+plot(prevLow, "Previous Day Low", color = color.purple, linewidth = 1, style = plot.style_line)
